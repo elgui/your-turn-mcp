@@ -1,0 +1,50 @@
+version: '3.8'
+
+services:
+  # Basic service (sound only)
+  your-turn-basic:
+    build: .
+    image: your-turn-server:latest
+    container_name: your-turn-basic
+    stdin_open: true
+    tty: true
+    profiles:
+      - basic
+
+  # Service with Telegram support via environment variables
+  your-turn-telegram:
+    build: .
+    image: your-turn-server:latest
+    container_name: your-turn-telegram
+    stdin_open: true
+    tty: true
+    environment:
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+    profiles:
+      - telegram
+
+  # Service with Telegram support via command-line arguments
+  your-turn-telegram-args:
+    build: .
+    image: your-turn-server:latest
+    container_name: your-turn-telegram-args
+    stdin_open: true
+    tty: true
+    command: ["--telegram-token", "${TELEGRAM_BOT_TOKEN}", "--telegram-chat-id", "${TELEGRAM_CHAT_ID}"]
+    profiles:
+      - telegram-args
+
+# Example usage:
+# 
+# 1. Basic usage (sound only):
+#    docker-compose --profile basic up your-turn-basic
+#
+# 2. With Telegram (environment variables):
+#    TELEGRAM_BOT_TOKEN="your_token" TELEGRAM_CHAT_ID="your_chat_id" docker-compose --profile telegram up your-turn-telegram
+#
+# 3. With Telegram (command-line args):
+#    TELEGRAM_BOT_TOKEN="your_token" TELEGRAM_CHAT_ID="your_chat_id" docker-compose --profile telegram-args up your-turn-telegram-args
+#
+# 4. Build only:
+#    docker-compose build
