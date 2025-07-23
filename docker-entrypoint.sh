@@ -15,6 +15,7 @@ show_usage() {
     echo "Options:"
     echo "  --telegram-token TOKEN     Telegram bot token"
     echo "  --telegram-chat-id ID      Telegram chat ID"
+    echo "  --network-test             Test network connectivity"
     echo "  --help                     Show help"
     echo "  --version                  Show version"
     echo ""
@@ -52,6 +53,11 @@ for arg in "$@"; do
             ;;
         --version)
             python3 mcp_your_turn_server.py --version
+            exit 0
+            ;;
+        --network-test)
+            echo "[DOCKER] Running network connectivity test..." >&2
+            python3 docker_network_test.py
             exit 0
             ;;
     esac

@@ -16,11 +16,14 @@ services:
     build: .
     image: your-turn-server:latest
     container_name: your-turn-telegram
-    stdin_open: true
-    tty: true
+    stdin_open: true    # CRITICAL: Keep stdin open for MCP communication
+    tty: false          # Don't allocate TTY for MCP (JSON-RPC over stdin/stdout)
+    network_mode: host  # Use host networking for Telegram API access
     environment:
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+      - TELEGRAM_ENABLED=true
+    restart: unless-stopped
     profiles:
       - telegram
 
@@ -29,11 +32,26 @@ services:
     build: .
     image: your-turn-server:latest
     container_name: your-turn-telegram-args
-    stdin_open: true
-    tty: true
+    stdin_open: true    # CRITICAL: Keep stdin open for MCP communication
+    tty: false          # Don't allocate TTY for MCP (JSON-RPC over stdin/stdout)
+    network_mode: host  # Use host networking for Telegram API access
     command: ["--telegram-token", "${TELEGRAM_BOT_TOKEN}", "--telegram-chat-id", "${TELEGRAM_CHAT_ID}"]
+    restart: unless-stopped
     profiles:
       - telegram-args
+
+  # Network testing service
+  your-turn-network-test:
+    build: .
+    image: your-turn-server:latest
+    container_name: your-turn-network-test
+    network_mode: host
+    environment:
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+    command: ["--network-test"]
+    profiles:
+      - test
 
 # Example usage:
 # 

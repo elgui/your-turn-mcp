@@ -39,6 +39,7 @@ COPY config.py .
 COPY telegram_notifier.py .
 COPY sound_manager.py .
 COPY interactive_session.py .
+COPY docker_network_test.py .
 COPY docker-entrypoint.sh .
 
 # Make scripts executable

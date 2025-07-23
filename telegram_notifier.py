@@ -50,6 +50,8 @@ class TelegramNotifier:
         self.interactive_mode = False
         self._running = False
         self._connection_tested = False
+        self._last_activity = None
+        self._monitoring_task = None
 
         logger.info("🤖 Initializing Telegram notifier...")
 
@@ -67,8 +69,8 @@ class TelegramNotifier:
             self.enabled = True
             logger.info("✅ Telegram notifier initialized successfully")
 
-            # Test connection in background (don't block initialization)
-            asyncio.create_task(self._test_connection())
+            # Note: Connection testing will happen when first used
+            # to avoid event loop issues during initialization
 
         except Exception as e:
             self._log_error(f"Failed to initialize Telegram bot: {e}")
@@ -98,19 +100,21 @@ class TelegramNotifier:
         logger.debug("✅ Telegram credentials validation passed")
         return True
 
-    async def _test_connection(self) -> None:
-        """Test Telegram connection in background."""
+    async def _test_connection(self) -> bool:
+        """Test Telegram connection."""
         if self._connection_tested or not self.enabled:
-            return
+            return self._connection_tested
 
         try:
             logger.debug("🔍 Testing Telegram connection...")
             me = await self.bot.get_me()
             logger.info(f"✅ Connected to Telegram bot: @{me.username} ({me.first_name})")
             self._connection_tested = True
+            return True
         except Exception as e:
             logger.warning(f"⚠️ Telegram connection test failed: {e}")
             logger.warning("💡 This might be a network issue or invalid token")
+            return False
 
     async def enable_interactive_mode(self) -> bool:
         """
@@ -130,6 +134,11 @@ class TelegramNotifier:
             message_handler = MessageHandler(filters.TEXT & ~filters.COMMAND, self._handle_message)
             self.application.add_handler(message_handler)
 
+            # Add callback query handler for inline keyboard buttons
+            from telegram.ext import CallbackQueryHandler
+            callback_handler = CallbackQueryHandler(self._handle_callback_query)
+            self.application.add_handler(callback_handler)
+
             self.interactive_mode = True
             self._log_info("Interactive mode enabled")
             return True
@@ -141,16 +150,44 @@ class TelegramNotifier:
     async def start_interactive_mode(self) -> None:
         """Start the interactive mode (polling for updates)."""
         if not self.interactive_mode or not self.application:
+            logger.error("Cannot start interactive mode: not enabled or no application")
+            return
+
+        if self._running:
+            logger.info("Interactive mode already running")
             return
 
         try:
+            logger.info("🔄 Initializing Telegram application...")
             self._running = True
+
+            # Initialize the application
             await self.application.initialize()
+            logger.info("✅ Application initialized")
+
+            # Start the application
             await self.application.start()
-            await self.application.updater.start_polling()
-            self._log_info("Interactive mode started")
+            logger.info("✅ Application started")
+
+            # Start polling for updates
+            logger.info("🔄 Starting polling for updates...")
+            await self.application.updater.start_polling(
+                poll_interval=1.0,      # Poll every second
+                timeout=10,             # 10 second timeout for each poll
+                bootstrap_retries=5,    # Retry 5 times on startup
+                drop_pending_updates=True  # Drop any pending updates on startup
+            )
+
+            logger.info("✅ Interactive mode started successfully - now listening for messages!")
+            self._log_info("🤖 Telegram bot is now actively listening for your responses")
+
+            # Start connection monitoring
+            self._start_connection_monitoring()
 
         except Exception as e:
+            logger.error(f"❌ Failed to start interactive mode: {e}")
+            import traceback
+            logger.debug(f"Full traceback: {traceback.format_exc()}")
             self._log_error(f"Failed to start interactive mode: {e}")
             self._running = False
 
@@ -168,33 +205,101 @@ class TelegramNotifier:
 
         except Exception as e:
             self._log_error(f"Failed to stop interactive mode: {e}")
+        finally:
+            # Stop monitoring
+            self._stop_connection_monitoring()
+
+    def _start_connection_monitoring(self) -> None:
+        """Start monitoring the connection."""
+        if self._monitoring_task:
+            return
+
+        logger.info("🔍 Starting connection monitoring...")
+        self._monitoring_task = asyncio.create_task(self._monitor_connection())
+
+    def _stop_connection_monitoring(self) -> None:
+        """Stop monitoring the connection."""
+        if self._monitoring_task:
+            logger.info("🛑 Stopping connection monitoring...")
+            self._monitoring_task.cancel()
+            self._monitoring_task = None
+
+    async def _monitor_connection(self) -> None:
+        """Monitor the connection and log activity."""
+        import datetime
+
+        while self._running:
+            try:
+                current_time = datetime.datetime.now()
+
+                # Log periodic status
+                if not self._last_activity:
+                    self._last_activity = current_time
+
+                time_since_activity = current_time - self._last_activity
+
+                # Log status every 30 seconds
+                if time_since_activity.total_seconds() > 30:
+                    logger.info(f"🤖 Bot status: Running for {time_since_activity.total_seconds():.0f}s, waiting for messages...")
+                    self._last_activity = current_time
+
+                # Wait before next check
+                await asyncio.sleep(30)
+
+            except asyncio.CancelledError:
+                logger.info("🛑 Connection monitoring stopped")
+                break
+            except Exception as e:
+                logger.error(f"❌ Connection monitoring error: {e}")
+                await asyncio.sleep(10)  # Wait before retrying
 
     async def _handle_message(self, update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
         """Handle incoming messages from users."""
         if not update.message or not update.message.text:
+            logger.debug("Received update without message or text")
             return
 
         chat_id = str(update.effective_chat.id)
         message_text = update.message.text.strip()
+        user_id = update.message.from_user.id
+        username = update.message.from_user.username or "Unknown"
+
+        logger.info(f"📨 Received message from user {username} ({user_id}) in chat {chat_id}: '{message_text}'")
+
+        # Update activity timestamp
+        import datetime
+        self._last_activity = datetime.datetime.now()
+
+        # Check if this is the configured chat
+        if chat_id != str(self.chat_id):
+            logger.warning(f"⚠️ Message from unauthorized chat {chat_id}, expected {self.chat_id}")
+            return
 
         # Get session manager and find active sessions for this chat
         session_manager = get_session_manager()
         active_sessions = session_manager.get_sessions_for_chat(chat_id)
 
+        logger.info(f"🔍 Found {len(active_sessions)} active sessions for chat {chat_id}")
+
         if not active_sessions:
             # No active sessions, send help message
+            logger.info("ℹ️ No active sessions found, sending help message")
             await self._send_help_message(chat_id)
             return
 
         # Find the most recent active session
         latest_session = max(active_sessions.values(), key=lambda s: s.created_at)
+        logger.info(f"🎯 Using latest session: {latest_session.session_id}")
 
         # Submit the response
+        logger.info(f"📝 Submitting response to session {latest_session.session_id}: '{message_text}'")
         success = session_manager.submit_response(latest_session.session_id, message_text)
 
         if success:
+            logger.info(f"✅ Response successfully submitted for session {latest_session.session_id}")
             await self._send_confirmation_message(chat_id, message_text)
         else:
+            logger.error(f"❌ Failed to submit response for session {latest_session.session_id}")
             await self._send_error_message(chat_id, "Failed to process your response")
 
     async def _send_help_message(self, chat_id: str) -> None:
@@ -228,7 +333,111 @@ class TelegramNotifier:
     def _log_error(self, message: str) -> None:
         """Log error message to stderr."""
         print(f"[TELEGRAM ERROR] {message}", file=sys.stderr)
-    
+
+    async def _handle_callback_query(self, update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
+        """Handle callback queries from inline keyboard buttons."""
+        query = update.callback_query
+        if not query:
+            logger.debug("Received update without callback query")
+            return
+
+        await query.answer()  # Acknowledge the callback query
+
+        chat_id = str(query.message.chat_id)
+        callback_data = query.data
+        user_id = query.from_user.id
+        username = query.from_user.username or "Unknown"
+
+        logger.info(f"🔘 Received button click from user {username} ({user_id}) in chat {chat_id}: '{callback_data}'")
+
+        # Update activity timestamp
+        import datetime
+        self._last_activity = datetime.datetime.now()
+
+        # Check if this is the configured chat
+        if chat_id != str(self.chat_id):
+            logger.warning(f"⚠️ Callback query from unauthorized chat {chat_id}, expected {self.chat_id}")
+            return
+
+        # Parse callback data
+        if callback_data.startswith("response:"):
+            # Format: response:session_id:response_type
+            parts = callback_data.split(":", 2)
+            if len(parts) == 3:
+                _, session_id, response_type = parts
+                logger.info(f"🎯 Processing quick response: {response_type} for session {session_id}")
+                await self._handle_quick_response(query, session_id, response_type)
+            else:
+                logger.error(f"❌ Invalid response callback data format: {callback_data}")
+        elif callback_data.startswith("custom:"):
+            # Format: custom:session_id
+            parts = callback_data.split(":", 1)
+            if len(parts) == 2:
+                _, session_id = parts
+                logger.info(f"💬 Processing custom response request for session {session_id}")
+                await self._handle_custom_response_request(query, session_id)
+            else:
+                logger.error(f"❌ Invalid custom callback data format: {callback_data}")
+        else:
+            logger.warning(f"⚠️ Unknown callback data format: {callback_data}")
+
+    async def _handle_quick_response(self, query, session_id: str, response_type: str) -> None:
+        """Handle quick response button presses."""
+        # Map response types to user-friendly messages
+        response_map = {
+            "complete": "✅ Task completed successfully",
+            "progress": "🔄 Task is in progress",
+            "help": "❌ Need help with this task",
+            "pause": "⏸️ Task paused for now"
+        }
+
+        response_text = response_map.get(response_type, f"Selected: {response_type}")
+        logger.info(f"📝 Quick response mapped: {response_type} -> '{response_text}'")
+
+        # Find the session and set response
+        session_manager = get_session_manager()
+        logger.info(f"🔍 Submitting quick response to session {session_id}: '{response_text}'")
+        success = session_manager.submit_response(session_id, response_text)
+
+        if success:
+            logger.info(f"✅ Quick response successfully submitted for session {session_id}: {response_text}")
+
+            # Edit the original message to show the response
+            try:
+                logger.info(f"🔄 Updating message to show response...")
+                await query.edit_message_text(
+                    text=f"❓ Question completed\n\n"
+                         f"✅ Your response: {response_text}\n\n"
+                         f"🆔 Session {session_id[:8]}... completed."
+                    # No parse_mode - send as plain text to avoid formatting errors
+                )
+                logger.info(f"✅ Message updated successfully")
+            except Exception as e:
+                logger.error(f"❌ Failed to edit message: {e}")
+        else:
+            logger.error(f"❌ Failed to submit quick response for session {session_id}")
+            # Session not found or already completed
+            try:
+                await query.edit_message_text(
+                    text="⚠️ This session has expired or already been completed."
+                    # No parse_mode - send as plain text to avoid formatting errors
+                )
+                logger.info("⚠️ Updated message to show session expired")
+            except Exception as e:
+                logger.error(f"❌ Failed to edit expired message: {e}")
+
+    async def _handle_custom_response_request(self, query, session_id: str) -> None:
+        """Handle custom response button press."""
+        try:
+            await query.edit_message_text(
+                text=f"💬 Please type your custom response below.\n\n"
+                     f"🆔 Session: {session_id[:8]}...\n\n"
+                     f"Just send a regular message with your answer."
+                # No parse_mode - send as plain text to avoid formatting errors
+            )
+        except Exception as e:
+            logger.error(f"Failed to edit message for custom response: {e}")
+
     async def send_interactive_question(self, session: "InteractiveSession") -> bool:
         """
         Send an interactive question via Telegram.
@@ -243,6 +452,8 @@ class TelegramNotifier:
             return False
 
         try:
+            from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
             # Format the interactive message
             message = f"❓ *Question for you:*\n\n{session.message}"
 
@@ -259,14 +470,50 @@ class TelegramNotifier:
             timestamp = datetime.datetime.now().strftime("%H:%M:%S")
             message += f"\n⏰ {timestamp}"
 
-            message += "\n\n💬 *Please reply with your answer.*"
+            # Add instructions
+            message += "\n\n💬 You can:"
+            message += "\n• Type a custom response"
+            message += "\n• Use the quick response buttons below"
 
-            # Send the message with timeout
+            # Create inline keyboard with quick response options
+            keyboard = [
+                [
+                    InlineKeyboardButton(
+                        "✅ Task Complete",
+                        callback_data=f"response:{session.session_id}:complete"
+                    ),
+                    InlineKeyboardButton(
+                        "🔄 In Progress",
+                        callback_data=f"response:{session.session_id}:progress"
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        "❌ Need Help",
+                        callback_data=f"response:{session.session_id}:help"
+                    ),
+                    InlineKeyboardButton(
+                        "⏸️ Pause",
+                        callback_data=f"response:{session.session_id}:pause"
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        "💬 Custom Response",
+                        callback_data=f"custom:{session.session_id}"
+                    )
+                ]
+            ]
+
+            reply_markup = InlineKeyboardMarkup(keyboard)
+
+            # Send the message with timeout (plain text to avoid parsing errors)
             await asyncio.wait_for(
                 self.bot.send_message(
                     chat_id=self.chat_id,
                     text=message,
-                    parse_mode='Markdown'
+                    # No parse_mode - send as plain text to avoid formatting errors
+                    reply_markup=reply_markup
                 ),
                 timeout=10.0  # 10 second timeout
             )
@@ -294,6 +541,12 @@ class TelegramNotifier:
 
         logger.info("📤 Sending Telegram notification...")
 
+        # Test connection if not already tested
+        if not self._connection_tested:
+            connection_ok = await self._test_connection()
+            if not connection_ok:
+                logger.error("❌ Telegram connection test failed, notification may not work")
+
         try:
             # Format the message
             message = "🔔 *Your Turn!*\n\nThe LLM is waiting for your response."
@@ -307,12 +560,12 @@ class TelegramNotifier:
 
             logger.debug(f"📝 Sending message to chat {self.chat_id}: {message[:50]}...")
             
-            # Send the message with timeout
+            # Send the message with timeout (plain text to avoid parsing errors)
             await asyncio.wait_for(
                 self.bot.send_message(
                     chat_id=self.chat_id,
-                    text=message,
-                    parse_mode='Markdown'
+                    text=message
+                    # No parse_mode - send as plain text to avoid formatting errors
                 ),
                 timeout=10.0  # 10 second timeout
             )

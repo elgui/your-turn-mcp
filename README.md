@@ -1,36 +1,84 @@
-# Enhanced MCP Your Turn Server
+# Enhanced MCP Your Turn Server v2.0
 
-A powerful Model Context Protocol (MCP) server that provides notification and interactive communication tools for LLM interactions. Features both simple notifications and interactive user input capabilities via Telegram.
+A powerful Model Context Protocol (MCP) server that provides notification and interactive communication tools for LLM interactions. Designed specifically for coding agents to signal task completion and gather user feedback.
+
+## 🎯 Purpose
+
+This MCP server serves a unique purpose: **providing "post-instructions" to coding agents**. When an AI coding assistant believes it has completed its mission, it calls the `your_turn` tool to:
+
+1. **Alert the user** that the task appears complete
+2. **Gather optional feedback** from the user (with 5-minute timeout)
+3. **Provide guidance** for next steps and quality improvements
+4. **Encourage reflection** on what was accomplished
+
+The tool acts as a checkpoint, ensuring coding agents don't just finish tasks but also consider documentation, testing, and continuous improvement.
 
 ## 🚀 Features
 
 - **🔔 Smart Notifications**: Cross-platform sound notifications with multiple fallback options
-- **💬 Interactive Mode**: Ask users questions and wait for responses via Telegram
-- **📱 Telegram Integration**: Rich Telegram bot notifications with interactive capabilities
+- **💬 Interactive Feedback**: Collect user responses via Telegram with 300-second timeout
+- **📱 Telegram Integration**: Rich bot notifications with inline keyboard buttons
 - **🎵 Embedded Sound**: No external sound file dependencies
 - **🐳 Docker Support**: Easy deployment with Docker
 - **⚙️ Flexible Configuration**: Environment variables, command-line args, or config files
-- **🛡️ Robust Fallbacks**: Graceful degradation when services are unavailable
-- **🔄 Backward Compatible**: Maintains compatibility with existing implementations
+- **🛡️ Robust Architecture**: Race condition handling and graceful fallbacks
+- **📝 Post-Instructions**: Built-in guidance for coding agents
 
-## 🛠️ Tools Available
+## 🛠️ Tool Available
 
-### 1. `your_turn_notify` - Simple Notifications
-Send a notification to the user with sound and optional Telegram message.
+### `your_turn` - Interactive Notification with Post-Instructions
 
-**Parameters**:
-- `reason` (optional, string): Reason for the notification
-
-### 2. `your_turn_interactive` - Interactive Questions
-Ask the user a question and wait for their response via Telegram.
+**The primary tool for coding agents to signal task completion and gather feedback.**
 
 **Parameters**:
-- `message` (required, string): The question to ask the user
-- `interactive` (required, boolean): Must be `true` to enable interactive mode
-- `timeout_seconds` (optional, integer): How long to wait for response (default: 300)
+- `reason` (optional, string): Reason for the notification (e.g., "Task completed", "Need user input")
 
-### 3. `your_turn` - Legacy Tool
-Backward-compatible tool that works like `your_turn_notify`.
+**Behavior**:
+1. **🔊 Plays notification sound** (cross-platform)
+2. **📱 Sends Telegram message** (if configured) with interactive buttons
+3. **⏰ Waits 300 seconds** for user response
+4. **📝 Returns comprehensive message** including:
+   - Notification confirmation
+   - User response (if provided)
+   - **Post-instructions for the coding agent**
+
+**Post-Instructions Message**:
+The tool automatically includes guidance for coding agents:
+```
+It appears that you haven't entirely completed your mission, have you?
+
+Once you have, please update:
+- the right 'AI-CONTEXT.md' with tools and documentation data and references, and keep it clean!
+
+And create a well designed, comprehensive prompt for a relevant new session,
+referencing files and passing sharp instructions for high quality job
+
+The new session might be about valuable improvements, but because we aim at
+developing robust solutions, it might be a better idea to do an honest critic
+of what has been accomplished in this session, and plan for a healthy checkup
+and quality improvements
+```
+
+**Example Usage**:
+```json
+{
+  "name": "your_turn",
+  "arguments": {
+    "reason": "Completed implementing the new feature"
+  }
+}
+```
+
+**Response Format**:
+```
+🔔 Notification sent! The user has been alerted.
+
+📝 Reason: Completed implementing the new feature
+
+✅ User Response: "Please add unit tests before finishing"
+
+[Post-instructions message follows...]
+```
 
 ## 🚀 Quick Start
 
@@ -40,7 +88,9 @@ Backward-compatible tool that works like `your_turn_notify`.
 python3 mcp_your_turn_server.py
 ```
 
-### With Telegram Notifications
+This provides sound notifications only. Perfect for local development.
+
+### With Telegram Interactive Features
 
 1. Create a Telegram bot via [@BotFather](https://t.me/botfather)
 2. Get your chat ID (see [Telegram Setup Guide](TELEGRAM_INTEGRATION.md))
@@ -50,18 +100,76 @@ python3 mcp_your_turn_server.py
 python3 mcp_your_turn_server.py --telegram-token "YOUR_BOT_TOKEN" --telegram-chat-id "YOUR_CHAT_ID"
 ```
 
-### Interactive Mode Example
+### Example Usage in Coding Agent
+
+When your coding agent thinks it's done:
 
 ```json
 {
-  "name": "your_turn_interactive",
+  "name": "your_turn",
   "arguments": {
-    "message": "What color scheme would you prefer for the website?",
-    "interactive": true,
-    "timeout_seconds": 600
+    "reason": "Implemented user authentication system with tests"
   }
 }
 ```
+
+**Response with Telegram** (user responds within 5 minutes):
+```
+🔔 Notification sent! The user has been alerted.
+
+📝 Reason: Implemented user authentication system with tests
+
+✅ User Response: "Great! Please also add rate limiting to the login endpoint"
+
+It appears that you haven't entirely completed your mission, have you?
+[...post-instructions continue...]
+```
+
+**Response without user feedback** (timeout or no Telegram):
+```
+🔔 Notification sent! The user has been alerted.
+
+📝 Reason: Implemented user authentication system with tests
+
+⏰ No user response received (5 minute timeout)
+
+It appears that you haven't entirely completed your mission, have you?
+[...post-instructions continue...]
+```
+
+## 🏗️ Architecture & Design Patterns
+
+### Robust Response Collection
+
+The server uses several design patterns to ensure reliable user response transmission:
+
+**1. Response Collector Pattern**
+- Encapsulates the complex process of collecting user responses
+- Handles Telegram setup, session management, and error recovery
+- Returns structured `ResponseResult` with metadata
+
+**2. Template Method Pattern**
+- Separates response collection from message building
+- Allows for consistent message formatting
+- Makes the code more maintainable and testable
+
+**3. Race Condition Mitigation**
+- Multiple verification points to ensure responses are captured
+- Fallback mechanisms when timing issues occur
+- Robust session state checking
+
+**4. Observer Pattern (via Telegram)**
+- Session manager observes Telegram updates
+- Asynchronous response handling
+- Clean separation of concerns
+
+### Key Improvements in v2.0
+
+- **🛡️ Race Condition Handling**: Robust mechanisms to prevent lost user responses
+- **📊 Structured Results**: `ResponseResult` dataclass for better error handling
+- **🔄 Fallback Mechanisms**: Multiple ways to capture user responses
+- **📝 Better Logging**: Comprehensive logging for debugging and monitoring
+- **🧪 Testable Architecture**: Clean separation allows for comprehensive testing
 
 ## 📦 Installation
 
@@ -231,13 +339,19 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 ## 📈 Changelog
 
 ### v2.0.0 (Enhanced Release)
-- ✨ Added interactive mode with Telegram response waiting
-- 🔧 Split tools: `your_turn_notify` and `your_turn_interactive`
-- 🎵 Embedded sound system with multiple fallbacks
-- 🛡️ Improved robustness and error handling
-- 📚 Comprehensive documentation
-- 🏗️ Modular architecture
-- 🔄 Maintained backward compatibility
+- ✨ **Interactive Telegram Integration**: Full two-way communication with inline keyboards
+- 📱 **Inline Keyboard Buttons**: Quick response options (Complete, Progress, Help, Pause)
+- 💬 **Custom Response Support**: Users can type custom answers or use quick buttons
+- 🔄 **Real-time Message Updates**: Messages update to show user responses
+- 📊 **Advanced Session Management**: Multiple concurrent sessions with timeout handling
+- 🔧 **Split Tools**: `your_turn_notify` (simple) and `your_turn_interactive` (advanced)
+- 🎵 **Robust Sound System**: 4-tier fallback system with embedded sounds
+- 🛡️ **Enhanced Error Handling**: Comprehensive logging and graceful degradation
+- 🧪 **Diagnostic Tools**: Built-in testing and troubleshooting utilities
+- 📚 **Complete Documentation**: Setup guides, troubleshooting, and API reference
+- 🐳 **Docker Support**: Updated container with all new features
+- 🏗️ **Modular Architecture**: Clean separation of concerns
+- 🔄 **Backward Compatibility**: All existing functionality preserved
 
 ### v1.1.0
 - Added Telegram bot integration
