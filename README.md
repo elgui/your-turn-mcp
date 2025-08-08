@@ -113,7 +113,7 @@ When your coding agent thinks it's done:
 }
 ```
 
-**Response with Telegram** (user responds within 5 minutes):
+**Response with user feedback** (user responds within 5 minutes):
 ```
 🔔 Notification sent! The user has been alerted.
 
@@ -121,8 +121,26 @@ When your coding agent thinks it's done:
 
 ✅ User Response: "Great! Please also add rate limiting to the login endpoint"
 
-It appears that you haven't entirely completed your mission, have you?
-[...post-instructions continue...]
+ It appears that you haven't entirely completed your mission, have you ?
+
+Once you have, please update :
+
+- the right 'AI-CONTEXT.md' with tools and documentation data and references, and keep it clean!
+
+And create a well designed, comprehensive prompt for a relevant new session, referencing files and passing sharp instructions for high quality job
+
+The new session might be about valuable improvements, but because we aim at developing robust solutions, it might be a better idea to do an honest critic of what has been accompilshed in this session, and plan for a healthy checkup and quality improvements
+```
+
+**Response with "Send Default Message"** (user clicks the default button):
+```
+🔔 Notification sent! The user has been alerted.
+
+📝 Reason: Implemented user authentication system with tests
+
+✅ User Response: "📝 Send default message (no user input)"
+
+[...post-instructions continue as above...]
 ```
 
 **Response without user feedback** (timeout or no Telegram):
@@ -133,8 +151,7 @@ It appears that you haven't entirely completed your mission, have you?
 
 ⏰ No user response received (5 minute timeout)
 
-It appears that you haven't entirely completed your mission, have you?
-[...post-instructions continue...]
+[...post-instructions continue as above...]
 ```
 
 ## 🏗️ Architecture & Design Patterns

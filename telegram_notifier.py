@@ -388,7 +388,8 @@ class TelegramNotifier:
             "complete": "✅ Task completed successfully",
             "progress": "🔄 Task is in progress",
             "help": "❌ Need help with this task",
-            "pause": "⏸️ Task paused for now"
+            "pause": "⏸️ Task paused for now",
+            "default": "📝 Send default message (no user input)"
         }
 
         response_text = response_map.get(response_type, f"Selected: {response_type}")
@@ -498,6 +499,10 @@ class TelegramNotifier:
                     )
                 ],
                 [
+                    InlineKeyboardButton(
+                        "📝 Send Default Message",
+                        callback_data=f"response:{session.session_id}:default"
+                    ),
                     InlineKeyboardButton(
                         "💬 Custom Response",
                         callback_data=f"custom:{session.session_id}"

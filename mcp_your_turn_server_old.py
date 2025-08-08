@@ -12,7 +12,6 @@ import os
 import argparse
 import logging
 from typing import Any, Dict, Optional
-from dataclasses import dataclass
 
 # Debugging environment variables
 print(f"DEBUG: TELEGRAM_BOT_TOKEN from os.getenv: {os.getenv('TELEGRAM_BOT_TOKEN')}", file=sys.stderr)
@@ -41,26 +40,13 @@ except ImportError as e:
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-
-@dataclass
-class ResponseResult:
-    """
-    Result of user response collection process.
-
-    This encapsulates the outcome of attempting to collect a user response,
-    including metadata about what was attempted and any errors encountered.
-    """
-    user_response: Optional[str]
-    telegram_attempted: bool
-    error: Optional[str]
-
 class MCPServer:
     def __init__(self, telegram_bot_token: Optional[str] = None, telegram_chat_id: Optional[str] = None):
-        # Define single tool - simplified back to original behavior
+        # Define both tools: simple notification and interactive
         self.tools = {
-            "your_turn": {
-                "name": "your_turn",
-                "description": "Send notification and wait for user response via Telegram. Plays sound and waits 300 seconds for user response.",
+            "your_turn_notify": {
+                "name": "your_turn_notify",
+                "description": "Send a simple notification to the user. Plays sound and optionally sends Telegram message.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -69,6 +55,30 @@ class MCPServer:
                             "description": "Optional reason for the notification (e.g., 'mission completed', 'need user input')"
                         }
                     },
+                    "additionalProperties": False
+                }
+            },
+            "your_turn_interactive": {
+                "name": "your_turn_interactive",
+                "description": "Ask the user a question and wait for their response. Requires interactive=True parameter.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "message": {
+                            "type": "string",
+                            "description": "The question or message to send to the user"
+                        },
+                        "interactive": {
+                            "type": "boolean",
+                            "description": "Must be set to True to enable interactive mode"
+                        },
+                        "timeout_seconds": {
+                            "type": "integer",
+                            "description": "How long to wait for a response (default: 300 seconds)",
+                            "default": 300
+                        }
+                    },
+                    "required": ["message", "interactive"],
                     "additionalProperties": False
                 }
             }
@@ -122,171 +132,6 @@ class MCPServer:
             logger.error(f"Sound notification failed: {e}")
             print(f"\a[NOTIFICATION: sound failed - {e}]", flush=True)
 
-    async def _ensure_interactive_mode(self) -> bool:
-        """Ensure Telegram interactive mode is running."""
-        if not self.telegram_notifier:
-            logger.error("No Telegram notifier available")
-            return False
-
-        try:
-            # Test connection first
-            logger.info("🔍 Testing Telegram connection...")
-            connection_ok = await self.telegram_notifier._test_connection()
-            if not connection_ok:
-                logger.error("❌ Telegram connection test failed")
-                return False
-
-            # Check if interactive mode is already running
-            if self.telegram_notifier.interactive_mode and self.telegram_notifier._running:
-                logger.info("✅ Interactive mode already running")
-                return True
-
-            logger.info("🚀 Starting Telegram interactive mode...")
-
-            # Enable interactive mode
-            if not self.telegram_notifier.interactive_mode:
-                logger.info("📱 Enabling interactive mode...")
-                success = await self.telegram_notifier.enable_interactive_mode()
-                if not success:
-                    logger.error("❌ Failed to enable interactive mode")
-                    return False
-                logger.info("✅ Interactive mode enabled")
-
-            # Start interactive mode (polling)
-            if not self.telegram_notifier._running:
-                logger.info("🔄 Starting interactive polling...")
-                await self.telegram_notifier.start_interactive_mode()
-
-                # Give it a moment to start
-                import asyncio
-                await asyncio.sleep(2)
-
-                if self.telegram_notifier._running:
-                    logger.info("✅ Interactive polling started successfully")
-                    return True
-                else:
-                    logger.error("❌ Interactive polling failed to start")
-                    return False
-
-            return True
-
-        except Exception as e:
-            logger.error(f"❌ Failed to ensure interactive mode: {e}")
-            import traceback
-            logger.debug(f"Full traceback: {traceback.format_exc()}")
-            return False
-
-    async def _handle_your_turn_tool(self, request: Dict[str, Any], arguments: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Handle the your_turn tool - simplified approach based on old server architecture.
-
-        This tool:
-        1. Plays notification sound
-        2. Attempts to get user response via Telegram (with timeout)
-        3. ALWAYS returns the pre-written message with any user response included
-        """
-        reason = arguments.get("reason", "")
-        logger.info(f"🔔 Your Turn tool called with reason: {reason}")
-
-        # Play notification sound
-        self.play_notification_sound()
-
-        # Try to get user response via Telegram (simplified approach)
-        user_response = None
-        telegram_attempted = False
-
-        if self.telegram_notifier and self.telegram_notifier.is_enabled():
-            telegram_attempted = True
-            try:
-                logger.info("🤖 Attempting to get user response via Telegram...")
-
-                # Ensure interactive mode is active
-                interactive_started = await self._ensure_interactive_mode()
-                if interactive_started:
-                    # Create session
-                    session = await create_interactive_session(
-                        message=f"🔔 Notification: {reason}\n\nPlease respond if you have any input, or I'll continue automatically in 5 minutes.",
-                        chat_id=self.telegram_notifier.chat_id,
-                        timeout_seconds=300
-                    )
-
-                    # Send question
-                    question_sent = await self.telegram_notifier.send_interactive_question(session)
-                    if question_sent:
-                        logger.info(f"⏳ Waiting for user response (300 seconds max)...")
-
-                        # Wait for response with guaranteed timeout
-                        try:
-                            user_response = await asyncio.wait_for(
-                                wait_for_user_response(session),
-                                timeout=305  # 5 second buffer
-                            )
-                        except asyncio.TimeoutError:
-                            logger.info("⏰ Timeout reached - no user response")
-                            user_response = None
-
-                        # Final check for race conditions
-                        if not user_response and hasattr(session, 'response') and session.response:
-                            logger.warning(f"🔄 Using session response: '{session.response}'")
-                            user_response = session.response
-
-                        if user_response:
-                            logger.info(f"✅ User response received: '{user_response}'")
-                        else:
-                            logger.info("⏰ No user response received")
-                    else:
-                        logger.error("❌ Failed to send Telegram question")
-                else:
-                    logger.error("❌ Failed to start interactive mode")
-
-            except Exception as e:
-                logger.error(f"❌ Error in Telegram interaction: {e}")
-
-        # Build response message (same structure as old server)
-        message = "🔔 Notification sent! The user has been alerted."
-
-        if reason:
-            message += f"\n\n📝 Reason: {reason}"
-
-        # Add user response if we got one
-        if user_response:
-            message += f"\n\n✅ User Response: \"{user_response}\""
-        else:
-            # Add status message
-            if telegram_attempted:
-                message += "\n\n⏰ No user response received (5 minute timeout)"
-            else:
-                message += "\n\n🔊 Sound notification only (Telegram not configured)"
-
-        # Add the pre-written post-instructions
-        message += "\n\n It appears that you haven't entirely completed your mission, have you ?\n\n"
-        message += "Once you have, please update : \n\n"
-        message += "- the right 'AI-CONTEXT.md' with tools and documentation data and references, and keep it clean!\n\n"
-        message += "And create a well designed, comprehensive prompt for a relevant new session, referencing files and passing sharp instructions for high quality job\n\n"
-        message += "The new session might be about valuable improvements, but because we aim at developing robust solutions, it might be a better idea to do an honest critic of what has been accompilshed in this session, and plan for a healthy checkup and quality improvements"
-
-        logger.info(f"📤 Returning response (user_response: {user_response is not None})")
-
-        response = {
-            "jsonrpc": "2.0",
-            "id": request.get("id"),
-            "result": {
-                "content": [
-                    {
-                        "type": "text",
-                        "text": message
-                    }
-                ]
-            }
-        }
-
-        # Log the exact response being returned
-        logger.info(f"🚀 Response ready - ID: {request.get('id')}, content length: {len(message)}")
-
-        return response
-
-
-
     async def _handle_notification_tool(self, request: Dict[str, Any], arguments: Dict[str, Any]) -> Dict[str, Any]:
         """Handle the notification tools (your_turn and your_turn_notify)."""
         reason = arguments.get("reason", "")
@@ -315,16 +160,11 @@ class MCPServer:
         else:
             message += "\n\n🔊 Sound notification only (Telegram not configured)"
 
-        message += "\n\n💡 **Default Guidance:**\n\n"
-        message += "From the accumulated context, identify the most critical area for improvement, and create a detailed set of instructions, containing details and file references (code and documentation).\n\n"
-        message += "**Key areas to consider:**\n"
-        message += "• Code quality and architecture improvements\n"
-        message += "• Documentation completeness and accuracy\n"
-        message += "• Testing coverage and reliability\n"
-        message += "• Performance optimizations\n"
-        message += "• Security considerations\n"
-        message += "• User experience enhancements\n\n"
-        message += "Please provide specific file references and actionable recommendations."
+        message += "\n\n It appears that you haven't entirely completed your mission, have you ?\n\n"
+        message += "Once you have, please update : \n\n"
+        message += "- the right 'AI-ENTRYPOINT.md' with tools and documentation data and references, and keep it clean!\n\n"
+        message += "And create a well designed, comprehensive prompt for a relevant new session, referencing files and passing sharp instructions for high quality job\n\n"
+        message += "The new session might be about valuable improvements, but because we aim at developing robust solutions, it might be a better idea to do an honest critic of what has been accompilshed in this session, and plan for a healthy checkup and quality improvements"
         return {
             "jsonrpc": "2.0",
             "id": request.get("id"),
@@ -342,7 +182,7 @@ class MCPServer:
         """Handle the interactive tool (your_turn_interactive)."""
         message = arguments.get("message", "")
         interactive = arguments.get("interactive", False)
-        timeout_seconds = arguments.get("timeout_seconds", 20000)
+        timeout_seconds = arguments.get("timeout_seconds", 300)
 
         if not message:
             return {
@@ -377,27 +217,12 @@ class MCPServer:
 
         # Check if Telegram is configured for interactive mode
         if not self.telegram_notifier or not self.telegram_notifier.is_enabled():
-            logger.error("Interactive mode requires Telegram configuration")
             return {
                 "jsonrpc": "2.0",
                 "id": request.get("id"),
                 "error": {
                     "code": -32603,
                     "message": "Interactive mode requires Telegram configuration"
-                }
-            }
-
-        # Ensure interactive mode is started
-        logger.info("🤖 Ensuring Telegram interactive mode is active...")
-        interactive_started = await self._ensure_interactive_mode()
-        if not interactive_started:
-            logger.error("Failed to start Telegram interactive mode")
-            return {
-                "jsonrpc": "2.0",
-                "id": request.get("id"),
-                "error": {
-                    "code": -32603,
-                    "message": "Failed to start Telegram interactive mode"
                 }
             }
 
@@ -492,8 +317,11 @@ class MCPServer:
             tool_name = params.get("name")
             arguments = params.get("arguments", {})
 
-            if tool_name == "your_turn":
-                return await self._handle_your_turn_tool(request, arguments)
+            if tool_name in ["your_turn", "your_turn_notify"]:
+                return await self._handle_notification_tool(request, arguments)
+
+            elif tool_name == "your_turn_interactive":
+                return await self._handle_interactive_tool(request, arguments)
 
             else:
                 return {
@@ -531,59 +359,28 @@ class MCPServer:
                 # Parse JSON request
                 try:
                     request = json.loads(line)
-                    logger.info(f"📥 Received request: {request.get('method')} (ID: {request.get('id')})")
                 except json.JSONDecodeError:
-                    logger.warning("⚠️ Received invalid JSON, ignoring")
                     continue
                 
                 # Handle request
                 response = await self.handle_request(request)
-
-                # Log before sending response
-                logger.info(f"🔄 Sending response for request ID {request.get('id')}: {response.get('result', {}).get('content', [{}])[0].get('text', '')[:100]}...")
-
+                
                 # Send response
-                response_json = json.dumps(response)
-                print(response_json, flush=True)
-
-                # Force flush all output streams immediately
-                sys.stdout.flush()
-                sys.stderr.flush()
-
-                # Log after sending
-                logger.info(f"✅ Response sent successfully (length: {len(response_json)} chars)")
-                logger.info(f"🔍 Response ID: {response.get('id')}, Method: {request.get('method')}")
-
-                # Additional delay to ensure response is fully transmitted
-                await asyncio.sleep(0.2)
-
-                # Log that we're ready for the next request
-                logger.info(f"🔄 Ready for next request...")
-
-                # Ensure we stay alive and don't exit prematurely
-                await asyncio.sleep(0.5)
-
+                print(json.dumps(response), flush=True)
+                
             except KeyboardInterrupt:
-                logger.info("🛑 Received interrupt signal - shutting down gracefully")
                 break
             except Exception as e:
                 # Send error response if we have a request ID
-                request_id = request.get('id') if 'request' in locals() else None
                 error_response = {
                     "jsonrpc": "2.0",
-                    "id": request_id,
+                    "id": None,
                     "error": {
                         "code": -32603,
                         "message": f"Internal error: {str(e)}"
                     }
                 }
                 print(json.dumps(error_response), flush=True)
-                logger.error(f"❌ Error handling request: {e}")
-                import traceback
-                logger.debug(f"Full traceback: {traceback.format_exc()}")
-
-                # Continue running after error
-                logger.info("🔄 Continuing to listen for requests...")
 
 def parse_args():
     """Parse command-line arguments."""

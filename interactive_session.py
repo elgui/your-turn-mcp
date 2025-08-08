@@ -33,7 +33,7 @@ class InteractiveSession:
     message: str
     chat_id: Optional[str] = None
     created_at: float = field(default_factory=time.time)
-    timeout_seconds: int = 10000  # in seconds
+    timeout_seconds: int = 300  # 5 minutes default
     status: SessionStatus = SessionStatus.PENDING
     response: Optional[str] = None
     error_message: Optional[str] = None
@@ -100,7 +100,7 @@ class InteractiveSessionManager:
         self,
         message: str,
         chat_id: Optional[str] = None,
-        timeout_seconds: int = 10000,
+        timeout_seconds: int = 300,
         metadata: Optional[Dict[str, Any]] = None
     ) -> InteractiveSession:
         """
@@ -289,7 +289,7 @@ def get_session_manager() -> InteractiveSessionManager:
 async def create_interactive_session(
     message: str,
     chat_id: Optional[str] = None,
-    timeout_seconds: int = 10000,
+    timeout_seconds: int = 300,
     metadata: Optional[Dict[str, Any]] = None
 ) -> InteractiveSession:
     """
