@@ -387,6 +387,153 @@ See [DEVELOPER.md](DEVELOPER.md) for detailed development information.
 
 This project is licensed under the MIT License - see the LICENSE file for details.
 
+## 🔧 MCP Client Configuration
+
+This server can be used with various MCP-compatible clients. Below are configuration examples for popular clients:
+
+### Claude Desktop
+
+Add to your `claude_desktop_config.json` file:
+
+**Location:**
+- **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
+
+**Configuration:**
+```json
+{
+  "mcpServers": {
+    "your-turn": {
+      "command": "python3",
+      "args": ["/path/to/your-turn/mcp_your_turn_server.py"],
+      "env": {
+        "TELEGRAM_BOT_TOKEN": "your_bot_token_here",
+        "TELEGRAM_CHAT_ID": "your_chat_id_here",
+        "DEEPGRAM_API_KEY": "your_deepgram_key_here"
+      }
+    }
+  }
+}
+```
+
+### Cline (VS Code Extension)
+
+Add to your `cline_mcp_settings.json` file:
+
+**Access:** Click "MCP Servers" → "Installed" → "Configure MCP Servers"
+
+**Configuration:**
+```json
+{
+  "mcpServers": {
+    "your-turn": {
+      "command": "python3",
+      "args": ["/path/to/your-turn/mcp_your_turn_server.py"],
+      "env": {
+        "TELEGRAM_BOT_TOKEN": "your_bot_token_here",
+        "TELEGRAM_CHAT_ID": "your_chat_id_here",
+        "DEEPGRAM_API_KEY": "your_deepgram_key_here"
+      },
+      "alwaysAllow": ["your_turn"],
+      "disabled": false
+    }
+  }
+}
+```
+
+### VS Code with MCP Extension
+
+Add to your workspace `.vscode/mcp.json` file:
+
+```json
+{
+  "mcpServers": {
+    "your-turn": {
+      "command": "python3",
+      "args": ["/path/to/your-turn/mcp_your_turn_server.py"],
+      "env": {
+        "TELEGRAM_BOT_TOKEN": "your_bot_token_here",
+        "TELEGRAM_CHAT_ID": "your_chat_id_here",
+        "DEEPGRAM_API_KEY": "your_deepgram_key_here"
+      }
+    }
+  }
+}
+```
+
+### Augment Code
+
+Add to your MCP server configuration:
+
+```json
+{
+  "mcpServers": {
+    "your-turn": {
+      "command": "python3",
+      "args": ["/path/to/your-turn/mcp_your_turn_server.py"],
+      "env": {
+        "TELEGRAM_BOT_TOKEN": "your_bot_token_here",
+        "TELEGRAM_CHAT_ID": "your_chat_id_here",
+        "DEEPGRAM_API_KEY": "your_deepgram_key_here"
+      }
+    }
+  }
+}
+```
+
+### Docker-based Configuration
+
+For containerized deployments, use this configuration:
+
+```json
+{
+  "mcpServers": {
+    "your-turn": {
+      "command": "docker",
+      "args": [
+        "run", "--rm", "-i",
+        "--env-file", "/path/to/your/.env",
+        "your-turn-server:latest"
+      ]
+    }
+  }
+}
+```
+
+### Environment Variables
+
+**Required:**
+- `TELEGRAM_BOT_TOKEN`: Your Telegram bot token from [@BotFather](https://t.me/botfather)
+- `TELEGRAM_CHAT_ID`: Your personal Telegram chat ID
+
+**Optional:**
+- `DEEPGRAM_API_KEY`: For audio transcription support (voice messages)
+
+**Note on Audio Transcription:**
+- Audio transcription is **optional** and gracefully handled
+- If `DEEPGRAM_API_KEY` is not provided, voice messages will show a friendly error
+- Users can always fall back to text responses
+- The server continues to work normally without audio transcription
+
+### Setup Instructions
+
+1. **Get Telegram Credentials:**
+   - Message [@BotFather](https://t.me/botfather) to create a bot
+   - Get your chat ID by messaging [@userinfobot](https://t.me/userinfobot)
+
+2. **Optional - Get Deepgram API Key:**
+   - Sign up at [Deepgram](https://deepgram.com)
+   - Create an API key for audio transcription
+
+3. **Update Configuration:**
+   - Replace `/path/to/your-turn/` with the actual path to this repository
+   - Replace placeholder tokens with your actual credentials
+   - Restart your MCP client
+
+4. **Test the Integration:**
+   - The `your_turn` tool should appear in your client's available tools
+   - Test with a simple call to verify notifications work
+
 ## 🆘 Support
 
 - 📖 **Documentation**: Check the docs/ directory
