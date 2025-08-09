@@ -93,6 +93,50 @@ class Config:
         except Exception as e:
             print(f"[CONFIG] Warning: failed to load messages YAML: {e}", file=sys.stderr)
             return defaults
+    def resolve_message_item(self, item: Any) -> str:
+        """Given a prewritten item, resolve its final text via templates/compose rules."""
+        msgs = self.messages.get("messages", {})
+        templates = msgs.get("templates", {}) if isinstance(msgs.get("templates"), dict) else {}
+        # Direct text
+        if isinstance(item, str):
+            return item
+        if isinstance(item, dict):
+            if 'text' in item and isinstance(item['text'], str):
+                return item['text']
+            # Single template use
+            if 'use' in item and isinstance(item['use'], str):
+                tpl = templates.get(item['use'])
+                if isinstance(tpl, str):
+                    return tpl
+                if isinstance(tpl, dict) and isinstance(tpl.get('text'), str):
+                    return tpl['text']
+            # Compose multiple templates with optional args
+            # item: { compose: [ {use: name, args:{...}}, {use: name2} ] }
+            comp = item.get('compose')
+            if isinstance(comp, list):
+                parts: list[str] = []
+                for step in comp:
+                    if isinstance(step, dict) and 'use' in step:
+                        name = step['use']
+                        tpl = templates.get(name)
+                        if isinstance(tpl, str):
+                            # simple string template
+                            parts.append(tpl)
+                        elif isinstance(tpl, dict):
+                            # allow dict template with 'text'
+                            t = tpl.get('text') if isinstance(tpl.get('text'), str) else None
+                            if t:
+                                parts.append(t)
+                    elif isinstance(step, str):
+                        # raw name
+                        t = templates.get(step)
+                        if isinstance(t, str):
+                            parts.append(t)
+                        elif isinstance(t, dict) and isinstance(t.get('text'), str):
+                            parts.append(t['text'])
+                return "\n\n".join(parts)
+        return str(item)
+
 
     def get_telegram_config(self) -> tuple[Optional[str], Optional[str]]:
         """Get Telegram bot token and chat ID if configured."""

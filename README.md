@@ -32,11 +32,12 @@ The tool acts as a checkpoint, ensuring coding agents don't just finish tasks bu
 
 **Parameters**:
 - `reason` (optional, string): Reason for the notification (e.g., "Task completed", "Need user input")
+- `timeout_seconds` (optional, number): Override wait timeout in seconds (default 300; min 10, max 7200)
 
 **Behavior**:
 1. **🔊 Plays notification sound** (cross-platform)
 2. **📱 Sends Telegram message** (if configured) with interactive buttons
-3. **⏰ Waits 300 seconds** for user response
+3. **⏰ Waits up to `timeout_seconds`** for user response
 4. **📝 Returns comprehensive message** including:
    - Notification confirmation
    - User response (if provided)
@@ -67,9 +68,19 @@ and quality improvements
     "reason": "Completed implementing the new feature"
   }
 }
-```
 
-**Response Format**:
+### Suggested usage in MCP coding agents
+
+Use your "your_turn" tool systematically in these situations:
+- when you need to ask the user clarification about something, in order to improve the quality of your job
+- when you are done with the mission that has been given to you, so that it sends a notification to the user
+
+You should never end a session without calling this tool.
+
+Additional tips:
+- Provide a concise `reason` so the human has context
+- Adjust `timeout_seconds` for faster feedback loops during development (e.g., 30–90s)
+- Prefer composing answers via the Telegram buttons using the YAML templates when wrapping up a session
 ```
 🔔 Notification sent! The user has been alerted.
 
@@ -213,6 +224,36 @@ docker build -t your-turn-server .
 
 # Run with Telegram support
 docker run -e TELEGRAM_BOT_TOKEN="your_token" -e TELEGRAM_CHAT_ID="your_chat_id" your-turn-server
+
+## 💡 Pre-written answers via YAML templates
+
+Define reusable templates and compose them into powerful one-tap answers in `messages.yml`:
+
+```yaml
+messages:
+  templates:
+    finalize_session: |
+      ... multi-line markdown ...
+    generate_docs: |
+      ... multi-line markdown ...
+    commit_message: |
+      ... conventional commits guidance ...
+    next_session_plan: |
+      ... detailed checklist for next session ...
+    sync_instructions: |
+      ... context and methodology to transfer ...
+
+  prewritten:
+    - label: "FIN/DOC"
+      compose: [finalize_session, generate_docs]
+    - label: "DOC/COMMIT/NEXT"
+      compose: [generate_docs, commit_message, next_session_plan, sync_instructions]
+```
+
+- Labels are concise “codes” summarizing the composed content
+- You can also use `use: templateName` or `text:` with raw content
+- YAML supports multi-line and markdown safely
+
 ```
 
 ## ⚙️ Configuration

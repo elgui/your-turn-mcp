@@ -7,7 +7,7 @@ Supports both simple notifications and interactive sessions.
 import asyncio
 import sys
 import logging
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
 try:
     from telegram import Bot, Update
@@ -369,30 +369,36 @@ class TelegramNotifier:
                 await self._handle_quick_response(query, session_id, response_type)
             else:
                 logger.error(f"❌ Invalid response callback data format: {callback_data}")
-        elif callback_data.startswith("custom:"):
-            # Format: custom:session_id
-            parts = callback_data.split(":", 1)
-            if len(parts) == 2:
-                _, session_id = parts
-                logger.info(f"💬 Processing custom response request for session {session_id}")
-                await self._handle_custom_response_request(query, session_id)
-            else:
-                logger.error(f"❌ Invalid custom callback data format: {callback_data}")
         else:
             logger.warning(f"⚠️ Unknown callback data format: {callback_data}")
 
     async def _handle_quick_response(self, query, session_id: str, response_type: str) -> None:
         """Handle quick response button presses."""
-        # Map response types to user-friendly messages
-        response_map = {
-            "complete": "✅ Task completed successfully",
-            "progress": "🔄 Task is in progress",
-            "help": "❌ Need help with this task",
-            "pause": "⏸️ Task paused for now",
-            "default": "📝 Send default message (no user input)"
-        }
-
-        response_text = response_map.get(response_type, f"Selected: {response_type}")
+        # Determine response text
+        response_text: str
+        if response_type.startswith("pre:"):
+            # Pre-written message selected by index
+            try:
+                idx = int(response_type.split(":", 1)[1])
+            except Exception:
+                logger.error(f"Invalid prewritten index: {response_type}")
+                return
+            from config import config as _cfg
+            msgs = getattr(_cfg, 'messages', {}).get('messages', {}) if _cfg else {}
+            items = msgs.get('prewritten') or []
+            if not isinstance(items, list) or idx < 0 or idx >= len(items):
+                logger.error(f"Prewritten message index out of range: {idx}")
+                return
+            item = items[idx]
+            try:
+                response_text = _cfg.resolve_message_item(item)
+            except Exception as e:
+                logger.error(f"Failed to resolve message item: {e}")
+                return
+        else:
+            # Unknown quick-type; ignore
+            logger.warning(f"Ignoring unknown response type: {response_type}")
+            return
         logger.info(f"📝 Quick response mapped: {response_type} -> '{response_text}'")
 
         # Find the session and set response
@@ -410,7 +416,6 @@ class TelegramNotifier:
                     text=f"❓ Question completed\n\n"
                          f"✅ Your response: {response_text}\n\n"
                          f"🆔 Session {session_id[:8]}... completed."
-                    # No parse_mode - send as plain text to avoid formatting errors
                 )
                 logger.info(f"✅ Message updated successfully")
             except Exception as e:
@@ -472,43 +477,41 @@ class TelegramNotifier:
             message += f"\n⏰ {timestamp}"
 
             # Add instructions
-            message += "\n\n💬 You can:"
-            message += "\n• Type a custom response"
-            message += "\n• Use the quick response buttons below"
+            message += "\n\n💬 You can simply type a response."
 
-            # Create inline keyboard with quick response options
-            keyboard = [
-                [
-                    InlineKeyboardButton(
-                        "✅ Task Complete",
-                        callback_data=f"response:{session.session_id}:complete"
-                    ),
-                    InlineKeyboardButton(
-                        "🔄 In Progress",
-                        callback_data=f"response:{session.session_id}:progress"
-                    )
-                ],
-                [
-                    InlineKeyboardButton(
-                        "❌ Need Help",
-                        callback_data=f"response:{session.session_id}:help"
-                    ),
-                    InlineKeyboardButton(
-                        "⏸️ Pause",
-                        callback_data=f"response:{session.session_id}:pause"
-                    )
-                ],
-                [
-                    InlineKeyboardButton(
-                        "📝 Send Default Message",
-                        callback_data=f"response:{session.session_id}:default"
-                    ),
-                    InlineKeyboardButton(
-                        "💬 Custom Response",
-                        callback_data=f"custom:{session.session_id}"
-                    )
-                ]
-            ]
+            # If prewritten options exist, we will render buttons for them below
+
+            # Build keyboard from configured pre-written messages, if any
+            from config import config as _cfg
+            msgs = getattr(_cfg, 'messages', {}).get('messages', {}) if _cfg else {}
+            predefined: List[Dict[str, Any]] = []
+            if isinstance(msgs.get('prewritten'), list):
+                for item in msgs['prewritten']:
+                    # Support:
+                    # - dict items {label, text}
+                    # - dict items {label, compose: [use: templateName|templateName]}
+                    # - plain strings
+                    if isinstance(item, dict):
+                        label = item.get('label') or (item.get('text') or str(item))[:32]
+                        predefined.append({'label': label})
+                    elif isinstance(item, str):
+                        predefined.append({'label': item[:32]})
+
+            keyboard = []
+            if predefined:
+                row = []
+                for i, item in enumerate(predefined, 1):
+                    row.append(InlineKeyboardButton(
+                        item['label'],
+                        callback_data=f"response:{session.session_id}:pre:{i-1}"
+                    ))
+                    # Limit to 2 per row for readability
+                    if len(row) == 2:
+                        keyboard.append(row); row = []
+                if row:
+                    keyboard.append(row)
+
+            # If no predefined messages configured, no keyboard (user simply types)
 
             reply_markup = InlineKeyboardMarkup(keyboard)
 

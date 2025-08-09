@@ -60,13 +60,17 @@ class MCPServer:
         self.tools = {
             "your_turn": {
                 "name": "your_turn",
-                "description": "Send notification and wait for user response via Telegram. Plays sound and waits 300 seconds for user response.",
+                "description": "Send notification and wait for user response via Telegram. Plays sound and waits up to timeout_seconds (default 300).",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
                         "reason": {
                             "type": "string",
                             "description": "Optional reason for the notification (e.g., 'mission completed', 'need user input')"
+                        },
+                        "timeout_seconds": {
+                            "type": "number",
+                            "description": "Optional override for wait timeout in seconds (min 10, max 7200). Default 300."
                         }
                     },
                     "additionalProperties": False
@@ -188,7 +192,13 @@ class MCPServer:
         3. ALWAYS returns the pre-written message with any user response included
         """
         reason = arguments.get("reason", "")
-        logger.info(f"🔔 Your Turn tool called with reason: {reason}")
+        # Allow MCP clients to override timeout (defaults to 300)
+        try:
+            timeout_seconds = int(float(arguments.get("timeout_seconds", 300)))
+        except Exception:
+            timeout_seconds = 300
+        timeout_seconds = max(10, min(timeout_seconds, 7200))
+        logger.info(f"🔔 Your Turn tool called with reason: {reason} (timeout_seconds={timeout_seconds})")
 
         # Play notification sound
         self.play_notification_sound()
@@ -207,21 +217,21 @@ class MCPServer:
                 if interactive_started:
                     # Create session
                     session = await create_interactive_session(
-                        message=f"🔔 Notification: {reason}\n\nPlease respond if you have any input, or I'll continue automatically in 5 minutes.",
+                        message=f"🔔 Notification: {reason}\n\nPlease respond if you have any input, or I'll continue automatically in {timeout_seconds//60 if timeout_seconds>=60 else timeout_seconds} {'minutes' if timeout_seconds>=60 else 'seconds' }.",
                         chat_id=self.telegram_notifier.chat_id,
-                        timeout_seconds=300
+                        timeout_seconds=timeout_seconds
                     )
 
                     # Send question
                     question_sent = await self.telegram_notifier.send_interactive_question(session)
                     if question_sent:
-                        logger.info(f"⏳ Waiting for user response (300 seconds max)...")
+                        logger.info(f"⏳ Waiting for user response ({timeout_seconds} seconds max)...")
 
                         # Wait for response with guaranteed timeout
                         try:
                             user_response = await asyncio.wait_for(
                                 wait_for_user_response(session),
-                                timeout=305  # 5 second buffer
+                                timeout=timeout_seconds + 5  # small buffer
                             )
                         except asyncio.TimeoutError:
                             logger.info("⏰ Timeout reached - no user response")
@@ -249,7 +259,7 @@ class MCPServer:
         default_prefix = msgs.get('default_prefix', "🔔 Notification sent! The user has been alerted.")
         default_reason_prefix = msgs.get('default_reason_prefix', "📝 Reason: ")
         response_prefix = msgs.get('response_prefix', "✅ User Response: ")
-        no_response_suffix = msgs.get('no_response_suffix', "⏰ No user response received (5 minute timeout)")
+        no_response_suffix = msgs.get('no_response_suffix', f"⏰ No user response received (timeout)")
         sound_only_suffix = msgs.get('sound_only_suffix', "🔊 Sound notification only (Telegram not configured)")
         post_instructions = msgs.get('post_instructions', "")
 
@@ -262,7 +272,7 @@ class MCPServer:
         if user_response:
             message += f"\n\n{response_prefix}\"{user_response}\""
         else:
-            # Add status message
+            # Add status message only if no user response
             message += f"\n\n{no_response_suffix}" if telegram_attempted else f"\n\n{sound_only_suffix}"
 
         # Add the configurable post-instructions

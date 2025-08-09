@@ -4,12 +4,48 @@
 messages:
   default_reason_prefix: "📝 Reason: "
   default_prefix: "🔔 Notification sent! The user has been alerted."
-  no_response_suffix: "⏰ No user response received (5 minute timeout)"
+  no_response_suffix: "⏰ No user response received (timeout)"
   sound_only_suffix: "🔊 Sound notification only (Telegram not configured)"
   response_prefix: "✅ User Response: "
 
   # Additional pre-written content appended to the notification
   post_instructions: |
+  # Reusable templates you can compose into answers
+  templates:
+    finalize_session: |
+      It appears that you haven't entirely completed your mission, have you?
+
+      Once you have, please update:
+      - the right 'AI-CONTEXT.md' with tools and documentation data and references, and keep it clean!
+
+      And create a well designed, comprehensive prompt for a relevant new session, referencing files and passing sharp instructions for high quality job
+
+      The new session might be about valuable improvements, but because we aim at developing robust solutions, it might be a better idea to do an honest critic of what has been accomplished in this session, and plan for a healthy checkup and quality improvements
+
+    next_session_plan: |
+      Please prepare a new set of detailed instructions for the next session, focusing on the most critical gap or highest impact feature. Include:
+      - Objective and success criteria
+      - Context and constraints (files, interfaces, edge cases)
+      - Step-by-step plan with validation
+      - Risks and mitigations
+      - Deliverables and tests to add
+
+    generate_docs: |
+      Generate or update the relevant documentation:
+      - Update README sections impacted by this change
+      - Update or create AI-CONTEXT.md with tools, data sources and references
+      - Add code comments where reasoning is non-obvious
+      - Provide examples or usage notes
+
+    commit_message: |
+      Write a conventional, concise commit message summarizing the work:
+      - Title: <type>(scope): short summary
+      - Body: context, key changes, rationale, links
+      - Footer: references to issues/PRs, breaking changes
+
+    sync_instructions: |
+      Combine context, methodology tricks, and file references so the next session can run independently and efficiently. Be explicit and link to exact paths.
+
     It appears that you haven't entirely completed your mission, have you?
 
     Once you have, please update:
@@ -18,4 +54,20 @@ messages:
     And create a well designed, comprehensive prompt for a relevant new session, referencing files and passing sharp instructions for high quality job
 
     The new session might be about valuable improvements, but because we aim at developing robust solutions, it might be a better idea to do an honest critic of what has been accomplished in this session, and plan for a healthy checkup and quality improvements
+
+
+  # Optional list of predefined quick replies (rendered as buttons)
+  # Each item can be:
+  # - a string (used as-is)
+  # - an object with {label, text}
+  # - an object with {label, use: <templateName>} or {label, compose: [<templateName>, ...]}
+  prewritten:
+    - label: "FIN/DOC"
+      compose: [finalize_session, generate_docs]
+    - label: "DOC/COMMIT/NEXT"
+      compose: [generate_docs, commit_message, next_session_plan, sync_instructions]
+    - label: "On it"
+      text: "👍 On it. Will follow up shortly."
+    - label: "Blocked"
+      text: "⛔ Blocked. I need help or input."
 
