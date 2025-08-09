@@ -281,10 +281,11 @@ class SoundManager:
         return False
     
     def _play_ascii_bell(self) -> bool:
-        """Play ASCII bell character as final fallback."""
+        """Play ASCII bell character as final fallback, without polluting stdout (MCP JSON)."""
         try:
             logger.debug("🔔 Using ASCII bell character as final fallback...")
-            print('\a', end='', flush=True)  # ASCII bell character
+            # IMPORTANT: Write bell to stderr to avoid corrupting MCP JSON on stdout
+            print('\a', end='', file=sys.stderr, flush=True)  # ASCII bell character to stderr
             # Also print a visible notification for terminals that don't support bell
             print("🔔 NOTIFICATION: Your turn!", file=sys.stderr)
             return True

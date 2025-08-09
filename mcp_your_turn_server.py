@@ -114,13 +114,15 @@ class MCPServer:
                 success = play_notification_sound()
                 if not success:
                     logger.warning("Sound manager failed, using fallback")
-                    print("\a", flush=True)  # ASCII bell fallback
+                    # IMPORTANT: write bell to stderr to avoid corrupting MCP JSON on stdout
+                    print("\a", file=sys.stderr, flush=True)  # ASCII bell fallback to stderr
             else:
                 # Fallback if sound manager not available
-                print("\a", flush=True)  # ASCII bell character
+                print("\a", file=sys.stderr, flush=True)  # ASCII bell character to stderr
         except Exception as e:
             logger.error(f"Sound notification failed: {e}")
-            print(f"\a[NOTIFICATION: sound failed - {e}]", flush=True)
+            # IMPORTANT: write any fallback bell/notice to stderr to avoid corrupting MCP JSON on stdout
+            print(f"\a[NOTIFICATION: sound failed - {e}]", file=sys.stderr, flush=True)
 
     async def _ensure_interactive_mode(self) -> bool:
         """Ensure Telegram interactive mode is running."""
@@ -242,28 +244,30 @@ class MCPServer:
             except Exception as e:
                 logger.error(f"❌ Error in Telegram interaction: {e}")
 
-        # Build response message (same structure as old server)
-        message = "🔔 Notification sent! The user has been alerted."
+        # Build response message (prefer configurable templates if available)
+        msgs = getattr(config, 'messages', {}).get('messages', {}) if config else {}
+        default_prefix = msgs.get('default_prefix', "🔔 Notification sent! The user has been alerted.")
+        default_reason_prefix = msgs.get('default_reason_prefix', "📝 Reason: ")
+        response_prefix = msgs.get('response_prefix', "✅ User Response: ")
+        no_response_suffix = msgs.get('no_response_suffix', "⏰ No user response received (5 minute timeout)")
+        sound_only_suffix = msgs.get('sound_only_suffix', "🔊 Sound notification only (Telegram not configured)")
+        post_instructions = msgs.get('post_instructions', "")
+
+        message = default_prefix
 
         if reason:
-            message += f"\n\n📝 Reason: {reason}"
+            message += f"\n\n{default_reason_prefix}{reason}"
 
         # Add user response if we got one
         if user_response:
-            message += f"\n\n✅ User Response: \"{user_response}\""
+            message += f"\n\n{response_prefix}\"{user_response}\""
         else:
             # Add status message
-            if telegram_attempted:
-                message += "\n\n⏰ No user response received (5 minute timeout)"
-            else:
-                message += "\n\n🔊 Sound notification only (Telegram not configured)"
+            message += f"\n\n{no_response_suffix}" if telegram_attempted else f"\n\n{sound_only_suffix}"
 
-        # Add the pre-written post-instructions
-        message += "\n\n It appears that you haven't entirely completed your mission, have you ?\n\n"
-        message += "Once you have, please update : \n\n"
-        message += "- the right 'AI-CONTEXT.md' with tools and documentation data and references, and keep it clean!\n\n"
-        message += "And create a well designed, comprehensive prompt for a relevant new session, referencing files and passing sharp instructions for high quality job\n\n"
-        message += "The new session might be about valuable improvements, but because we aim at developing robust solutions, it might be a better idea to do an honest critic of what has been accompilshed in this session, and plan for a healthy checkup and quality improvements"
+        # Add the configurable post-instructions
+        if post_instructions:
+            message += f"{post_instructions}"
 
         logger.info(f"📤 Returning response (user_response: {user_response is not None})")
 
@@ -302,10 +306,15 @@ class MCPServer:
             except Exception as e:
                 logger.error(f"Failed to send Telegram notification: {e}")
 
-        # Prepare response message
-        message = "🔔 Notification sent! The user has been alerted."
+        # Prepare response message (use config templates)
+        msgs = getattr(config, 'messages', {}).get('messages', {}) if config else {}
+        default_prefix = msgs.get('default_prefix', "🔔 Notification sent! The user has been alerted.")
+        default_reason_prefix = msgs.get('default_reason_prefix', "📝 Reason: ")
+        sound_only_suffix = msgs.get('sound_only_suffix', "🔊 Sound notification only (Telegram not configured)")
+
+        message = default_prefix
         if reason:
-            message += f"\n\n📝 Reason: {reason}"
+            message += f"\n\n{default_reason_prefix}{reason}"
 
         # Add notification status to message
         if telegram_sent:
@@ -313,7 +322,7 @@ class MCPServer:
         elif self.telegram_notifier:
             message += "\n\n⚠️ Telegram notification failed (check logs)"
         else:
-            message += "\n\n🔊 Sound notification only (Telegram not configured)"
+            message += f"\n\n{sound_only_suffix}"
 
         message += "\n\n💡 **Default Guidance:**\n\n"
         message += "From the accumulated context, identify the most critical area for improvement, and create a detailed set of instructions, containing details and file references (code and documentation).\n\n"
@@ -530,10 +539,12 @@ class MCPServer:
                 
                 # Parse JSON request
                 try:
+                    # Log raw line for debugging (stderr via logger)
+                    logger.info(f"🧾 Raw stdin line: {line!r}")
                     request = json.loads(line)
                     logger.info(f"📥 Received request: {request.get('method')} (ID: {request.get('id')})")
-                except json.JSONDecodeError:
-                    logger.warning("⚠️ Received invalid JSON, ignoring")
+                except json.JSONDecodeError as e:
+                    logger.warning(f"⚠️ Received invalid JSON, ignoring. Error: {e}. Raw: {line!r}")
                     continue
                 
                 # Handle request

@@ -41,6 +41,9 @@ COPY sound_manager.py .
 COPY interactive_session.py .
 COPY docker_network_test.py .
 COPY docker-entrypoint.sh .
+# Optional messages configuration
+COPY messages.yml .
+
 
 # Make scripts executable
 RUN chmod +x mcp_your_turn_server.py docker-entrypoint.sh

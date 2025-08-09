@@ -1,0 +1,21 @@
+# Human-friendly messages configuration for your-turn MCP server
+# This file is optional. If present, the server will prefer its values; otherwise it uses built-ins.
+
+messages:
+  default_reason_prefix: "📝 Reason: "
+  default_prefix: "🔔 Notification sent! The user has been alerted."
+  no_response_suffix: "⏰ No user response received (5 minute timeout)"
+  sound_only_suffix: "🔊 Sound notification only (Telegram not configured)"
+  response_prefix: "✅ User Response: "
+
+  # Additional pre-written content appended to the notification
+  post_instructions: |
+    It appears that you haven't entirely completed your mission, have you?
+
+    Once you have, please update:
+    - the right 'AI-CONTEXT.md' with tools and documentation data and references, and keep it clean!
+
+    And create a well designed, comprehensive prompt for a relevant new session, referencing files and passing sharp instructions for high quality job
+
+    The new session might be about valuable improvements, but because we aim at developing robust solutions, it might be a better idea to do an honest critic of what has been accomplished in this session, and plan for a healthy checkup and quality improvements
+
