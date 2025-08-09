@@ -7,8 +7,11 @@ Supports both simple notifications and interactive sessions.
 import asyncio
 import sys
 import logging
+import os
+import tempfile
 from typing import Optional, Dict, Any, List
 
+# Telegram imports (optional dependency)
 try:
     from telegram import Bot, Update
     from telegram.ext import Application, MessageHandler, filters, ContextTypes
@@ -25,6 +28,17 @@ except ImportError:
     TelegramError = Exception
     NetworkError = Exception
     TimedOut = Exception
+
+# Deepgram imports (optional dependency)
+try:
+    from deepgram import DeepgramClient, PrerecordedOptions  # type: ignore
+    from deepgram.clients.common.v1.options import BufferSource  # type: ignore
+    DEEPGRAM_AVAILABLE = True
+except Exception:
+    DEEPGRAM_AVAILABLE = False
+    DeepgramClient = None  # type: ignore
+    PrerecordedOptions = None  # type: ignore
+    BufferSource = None  # type: ignore
 
 from interactive_session import get_session_manager, InteractiveSession
 
@@ -130,9 +144,14 @@ class TelegramNotifier:
             # Create application for handling updates
             self.application = Application.builder().token(self.bot_token).build()
 
-            # Add message handler for user responses
+            # Add message handler for user responses (text)
             message_handler = MessageHandler(filters.TEXT & ~filters.COMMAND, self._handle_message)
             self.application.add_handler(message_handler)
+
+            # Add audio/voice/document handler for user responses via audio
+            audio_filters = (filters.AUDIO | filters.VOICE | filters.Document.ALL)
+            audio_handler = MessageHandler(audio_filters, self._handle_audio_message)
+            self.application.add_handler(audio_handler)
 
             # Add callback query handler for inline keyboard buttons
             from telegram.ext import CallbackQueryHandler
@@ -309,6 +328,164 @@ class TelegramNotifier:
             await self.bot.send_message(chat_id=chat_id, text=message)
         except Exception as e:
             self._log_error(f"Failed to send help message: {e}")
+    async def _download_telegram_file(self, update: "Update") -> Optional[str]:
+        """Download the audio/voice/document file from Telegram and return local path.
+        Returns a temporary file path or None on failure.
+        """
+        try:
+            message = update.message
+            if not message:
+                return None
+
+            # Determine the effective attachment
+            attachment = None
+            filename_hint = None
+            if message.voice:
+                attachment = message.voice
+                filename_hint = "voice.ogg"  # Telegram voice notes are OGG/Opus
+            elif message.audio:
+                attachment = message.audio
+                filename_hint = message.audio.file_name or "audio.bin"
+            elif message.document:
+                # Only accept documents that are audio mime types
+                if message.document.mime_type and not message.document.mime_type.startswith("audio/"):
+                    return None
+                attachment = message.document
+                filename_hint = message.document.file_name or "document.bin"
+            else:
+                return None
+
+            tg_file = await attachment.get_file()
+
+            # Create temp file with same extension if possible
+            suffix = ""
+            if filename_hint and "." in filename_hint:
+                suffix = os.path.splitext(filename_hint)[1]
+            tmp_fd, tmp_path = tempfile.mkstemp(prefix="yt_tg_", suffix=suffix)
+            os.close(tmp_fd)
+
+            await tg_file.download_to_drive(tmp_path)
+            logger.info(f"📥 Downloaded Telegram file to: {tmp_path}")
+            return tmp_path
+        except Exception as e:
+            logger.error(f"Failed to download Telegram file: {e}")
+            return None
+
+    async def _transcribe_with_deepgram(self, file_path: str, timeout_seconds: int = 45) -> Optional[str]:
+        """Transcribe a local audio file using Deepgram. Returns transcript text or None."""
+        if not DEEPGRAM_AVAILABLE:
+            logger.error("Deepgram SDK not available. Install with: pip install deepgram-sdk")
+            return None
+        try:
+            api_key = os.getenv("DEEPGRAM_API_KEY")
+            if not api_key:
+                logger.error("DEEPGRAM_API_KEY not set in environment.")
+                return None
+
+            # Initialize client
+            dg = DeepgramClient(api_key)
+
+            # Choose model and options; smart_format adds punctuation/casing
+            # Hint mono channel to favor MP3 mono processing where applicable
+            options = PrerecordedOptions(
+                model="nova-3",
+                smart_format=True,
+                channels=1
+            )
+
+            # Open and send file (Deepgram auto-detects format including mp3, wav, ogg/opus, m4a)
+            loop = asyncio.get_event_loop()
+            def _blocking_call():
+                # Read file content and create BufferSource
+                with open(file_path, "rb") as f:
+                    file_content = f.read()
+                source = BufferSource(buffer=file_content)
+                return dg.listen.rest.v("1").transcribe_file(source=source, options=options)
+            # Run the blocking HTTP call in a thread to avoid blocking the event loop
+            response = await asyncio.wait_for(loop.run_in_executor(None, _blocking_call), timeout=timeout_seconds)
+
+            # Extract transcript text
+            # Deepgram SDK returns a typed response; access safest via dict
+            try:
+                if hasattr(response, "to_dict"):
+                    data = response.to_dict()
+                else:
+                    data = response
+                transcript = data["results"]["channels"][0]["alternatives"][0].get("transcript", "").strip()
+            except Exception:
+                transcript = ""
+
+            if transcript:
+                logger.info(f"🗣️ Deepgram transcript: {transcript[:80]}{'...' if len(transcript)>80 else ''}")
+                return transcript
+            else:
+                logger.warning("Deepgram returned empty transcript")
+                return None
+        except asyncio.TimeoutError:
+            logger.error("Deepgram transcription timed out")
+            return None
+        except Exception as e:
+            logger.error(f"Deepgram transcription error: {e}")
+            return None
+
+    async def _handle_audio_message(self, update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
+        """Handle incoming audio/voice/document messages by transcribing and forwarding as text."""
+        chat_id = str(update.effective_chat.id)
+        # Only process messages from the configured chat
+        if chat_id != str(self.chat_id):
+            logger.warning(f"⚠️ Audio from unauthorized chat {chat_id}, expected {self.chat_id}")
+            return
+        # Update activity timestamp
+        import datetime
+        self._last_activity = datetime.datetime.now()
+
+        # Download file
+        local_path = await self._download_telegram_file(update)
+        if not local_path:
+            await self._send_error_message(chat_id, "Failed to download audio file")
+            return
+
+        # Optional: Enforce size limit (Telegram allows large files but we can limit to ~25MB)
+        try:
+            max_bytes = int(os.getenv("AUDIO_MAX_BYTES", "26214400"))  # 25 MB default
+            size = os.path.getsize(local_path)
+            if size > max_bytes:
+                logger.error(f"Audio file too large: {size} > {max_bytes}")
+                await self._send_error_message(chat_id, "Audio file too large to process")
+                try:
+                    os.remove(local_path)
+                except Exception:
+                    pass
+                return
+        except Exception:
+            pass
+
+        # Transcribe with Deepgram
+        transcript = await self._transcribe_with_deepgram(local_path)
+
+        # Clean up file
+        try:
+            os.remove(local_path)
+        except Exception:
+            pass
+
+        if not transcript:
+            await self._send_error_message(chat_id, "Could not transcribe audio. Please try again or type your reply.")
+            return
+
+        # Submit transcript as a normal text response into the latest active session
+        session_manager = get_session_manager()
+        active_sessions = session_manager.get_sessions_for_chat(chat_id)
+        if not active_sessions:
+            await self._send_help_message(chat_id)
+            return
+        latest_session = max(active_sessions.values(), key=lambda s: s.created_at)
+        success = session_manager.submit_response(latest_session.session_id, transcript)
+        if success:
+            await self._send_confirmation_message(chat_id, transcript)
+        else:
+            await self._send_error_message(chat_id, "Failed to process your transcribed response")
+            logger.error("Session manager failed to submit transcribed response")
 
     async def _send_confirmation_message(self, chat_id: str, response: str) -> None:
         """Send a confirmation message after receiving a response."""
@@ -325,11 +502,11 @@ class TelegramNotifier:
             await self.bot.send_message(chat_id=chat_id, text=message)
         except Exception as e:
             self._log_error(f"Failed to send error message: {e}")
-    
+
     def _log_info(self, message: str) -> None:
         """Log info message to stderr."""
         print(f"[TELEGRAM] {message}", file=sys.stderr)
-    
+
     def _log_error(self, message: str) -> None:
         """Log error message to stderr."""
         print(f"[TELEGRAM ERROR] {message}", file=sys.stderr)
@@ -536,10 +713,10 @@ class TelegramNotifier:
     async def send_notification(self, reason: Optional[str] = None) -> bool:
         """
         Send a notification via Telegram.
-        
+
         Args:
             reason: Optional reason for the notification
-            
+
         Returns:
             True if notification was sent successfully, False otherwise
         """
@@ -567,7 +744,7 @@ class TelegramNotifier:
             message += f"\n\n⏰ {timestamp}"
 
             logger.debug(f"📝 Sending message to chat {self.chat_id}: {message[:50]}...")
-            
+
             # Send the message with timeout (plain text to avoid parsing errors)
             await asyncio.wait_for(
                 self.bot.send_message(
@@ -577,7 +754,7 @@ class TelegramNotifier:
                 ),
                 timeout=10.0  # 10 second timeout
             )
-            
+
             logger.info("✅ Telegram notification sent successfully")
             return True
 
@@ -606,7 +783,7 @@ class TelegramNotifier:
             import traceback
             logger.debug(f"Full traceback: {traceback.format_exc()}")
             return False
-    
+
     def is_enabled(self) -> bool:
         """Check if Telegram notifications are enabled."""
         return self.enabled
@@ -616,11 +793,11 @@ class TelegramNotifier:
 def create_telegram_notifier(bot_token: Optional[str], chat_id: Optional[str]) -> TelegramNotifier:
     """
     Create a TelegramNotifier instance.
-    
+
     Args:
         bot_token: Telegram bot token
         chat_id: Target chat ID
-        
+
     Returns:
         TelegramNotifier instance
     """

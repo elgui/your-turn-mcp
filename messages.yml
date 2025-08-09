@@ -46,15 +46,6 @@ messages:
     sync_instructions: |
       Combine context, methodology tricks, and file references so the next session can run independently and efficiently. Be explicit and link to exact paths.
 
-    It appears that you haven't entirely completed your mission, have you?
-
-    Once you have, please update:
-    - the right 'AI-CONTEXT.md' with tools and documentation data and references, and keep it clean!
-
-    And create a well designed, comprehensive prompt for a relevant new session, referencing files and passing sharp instructions for high quality job
-
-    The new session might be about valuable improvements, but because we aim at developing robust solutions, it might be a better idea to do an honest critic of what has been accomplished in this session, and plan for a healthy checkup and quality improvements
-
 
   # Optional list of predefined quick replies (rendered as buttons)
   # Each item can be:
@@ -70,4 +61,9 @@ messages:
       text: "👍 On it. Will follow up shortly."
     - label: "Blocked"
       text: "⛔ Blocked. I need help or input."
+
+    # Mark one default message to auto-send on timeout
+    - label: "Proceed"
+      text: "Please proceed with your plan."
+      default: true
 

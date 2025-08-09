@@ -194,10 +194,13 @@ class MCPServer:
         reason = arguments.get("reason", "")
         # Allow MCP clients to override timeout (defaults to 300)
         try:
-            timeout_seconds = int(float(arguments.get("timeout_seconds", 300)))
+            timeout_seconds_raw = arguments.get("timeout_seconds", 300)
+            timeout_seconds = int(float(timeout_seconds_raw))
         except Exception:
             timeout_seconds = 300
-        timeout_seconds = max(10, min(timeout_seconds, 7200))
+        # Support infinite timeout when 0 is specified; otherwise clamp between 10 and 7200
+        if timeout_seconds != 0:
+            timeout_seconds = max(10, min(timeout_seconds, 7200))
         logger.info(f"🔔 Your Turn tool called with reason: {reason} (timeout_seconds={timeout_seconds})")
 
         # Play notification sound
@@ -216,8 +219,16 @@ class MCPServer:
                 interactive_started = await self._ensure_interactive_mode()
                 if interactive_started:
                     # Create session
+                    # Compose prompt text, accounting for infinite timeout
+                    if timeout_seconds == 0:
+                        prompt_note = "Please respond when ready; I will wait indefinitely."
+                    else:
+                        unit = 'minutes' if timeout_seconds >= 60 else 'seconds'
+                        val = (timeout_seconds // 60) if timeout_seconds >= 60 else timeout_seconds
+                        prompt_note = f"Please respond if you have any input, or I'll continue automatically in {val} {unit}."
+
                     session = await create_interactive_session(
-                        message=f"🔔 Notification: {reason}\n\nPlease respond if you have any input, or I'll continue automatically in {timeout_seconds//60 if timeout_seconds>=60 else timeout_seconds} {'minutes' if timeout_seconds>=60 else 'seconds' }.",
+                        message=f"🔔 Notification: {reason}\n\n{prompt_note}",
                         chat_id=self.telegram_notifier.chat_id,
                         timeout_seconds=timeout_seconds
                     )
@@ -225,17 +236,21 @@ class MCPServer:
                     # Send question
                     question_sent = await self.telegram_notifier.send_interactive_question(session)
                     if question_sent:
-                        logger.info(f"⏳ Waiting for user response ({timeout_seconds} seconds max)...")
-
-                        # Wait for response with guaranteed timeout
-                        try:
-                            user_response = await asyncio.wait_for(
-                                wait_for_user_response(session),
-                                timeout=timeout_seconds + 5  # small buffer
-                            )
-                        except asyncio.TimeoutError:
-                            logger.info("⏰ Timeout reached - no user response")
-                            user_response = None
+                        if timeout_seconds == 0:
+                            logger.info("⏳ Waiting indefinitely for user response (infinite timeout)...")
+                            # Wait without wrapping in asyncio.wait_for
+                            user_response = await wait_for_user_response(session)
+                        else:
+                            logger.info(f"⏳ Waiting for user response ({timeout_seconds} seconds max)...")
+                            # Wait for response with guaranteed timeout
+                            try:
+                                user_response = await asyncio.wait_for(
+                                    wait_for_user_response(session),
+                                    timeout=timeout_seconds + 5  # small buffer
+                                )
+                            except asyncio.TimeoutError:
+                                logger.info("⏰ Timeout reached - no user response")
+                                user_response = None
 
                         # Final check for race conditions
                         if not user_response and hasattr(session, 'response') and session.response:

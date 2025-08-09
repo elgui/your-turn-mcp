@@ -41,9 +41,13 @@ class InteractiveSession:
     
     @property
     def is_expired(self) -> bool:
-        """Check if the session has expired."""
+        """Check if the session has expired.
+        A timeout_seconds <= 0 means infinite timeout (never expires).
+        """
+        if self.timeout_seconds <= 0:
+            return False
         return time.time() - self.created_at > self.timeout_seconds
-    
+
     @property
     def is_active(self) -> bool:
         """Check if the session is still active (pending or waiting)."""
@@ -164,6 +168,31 @@ class InteractiveSessionManager:
 
                 session.mark_timeout()
                 logger.warning(f"⏰ Session {session.session_id} timed out after {session.timeout_seconds} seconds ({poll_count} polls)")
+
+                # Auto-submit default message if configured
+                try:
+                    from config import config as _cfg
+                    msgs = getattr(_cfg, 'messages', {}).get('messages', {}) if _cfg else {}
+                    pre = msgs.get('prewritten') or []
+                    default_item = None
+                    if isinstance(pre, list):
+                        for it in pre:
+                            if isinstance(it, dict) and it.get('default') is True:
+                                default_item = it
+                                break
+                    if default_item is not None:
+                        try:
+                            text = _cfg.resolve_message_item(default_item)
+                            if text:
+                                old_status = session.status.value
+                                session.mark_completed(text)
+                                logger.info(f"✅ Auto-submitted default message on timeout for session {session.session_id} (was {old_status})")
+                                return text
+                        except Exception as e:
+                            logger.error(f"Failed to resolve default prewritten message: {e}")
+                except Exception as e:
+                    logger.error(f"Default message lookup failed: {e}")
+
                 break
 
             # Check if session is no longer active (but not completed)
